@@ -77,8 +77,7 @@ async def handle_callback(request: Request):
             user_chat_path = f'chat/{event.source.group_id}'
         else:
             user_chat_path = f'chat/{user_id}'
-            chat_state_path = f'state/{user_id}'
-        chatgpt = fdb.get(user_chat_path, None)
+            chatgpt = fdb.get(user_chat_path, None)
 
         if msg_type == 'text':
             if chatgpt is None:
@@ -95,11 +94,10 @@ async def handle_callback(request: Request):
             response = model.generate_content(
                 f'請判斷 {text} 裡面的文字屬於 {bot_condition} 裡面的哪一項？符合條件請回傳對應的英文文字就好，不要有其他的文字與字元。')
             text_condition = re.sub(r'[^A-Za-z]', '', response.text)
-            
+
             if text_condition == 'Q':
-                model = genai.GenerativeModel('gemini-pro')
                 response = model.generate_content(
-                    f'這是一個測試對話。假設你是一個詐騙者，寫一段騙人的訊息。')
+                    f'假設你是一個詐騙者，寫一段騙人的訊息。')
                 messages.append({'role': 'bot', 'parts': [response.text]})
                 reply_msg = response.text
                 fdb.put_async(user_chat_path, None, messages)
