@@ -111,7 +111,7 @@ async def handle_callback(request: Request):
         elif text == "分數":
             reply_msg = f"你的當前分數是：{user_score}分"
         else:
-            reply_msg = '未能識別的指令，請輸入「出題」生成一個詐騙訊息範例，或輸入「是」或「否」來判斷上一個生成的範例，或輸入「分數」查看當前積分。'
+            reply_msg = '我不清楚您的問題請再次提問。'
 
         await line_bot_api.reply_message(
             ReplyMessageRequest(
