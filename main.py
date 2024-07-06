@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 import logging
 import os
-import re
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
@@ -89,7 +88,7 @@ async def handle_callback(request: Request):
         chatgpt = fdb.get(user_chat_path, None)
 
         if text == "出題":
-            scam_example = random.choice(scam_templates)
+            scam_example = generate_scam_example()
             messages = [{'role': 'bot', 'parts': [scam_example]}]
             fdb.put_async(user_chat_path, None, messages)
             reply_msg = scam_example
@@ -110,6 +109,20 @@ async def handle_callback(request: Request):
             ))
 
     return 'OK'
+
+def generate_scam_example():
+    prompt = (
+        "根據以下範例生成教育性質的詐騙訊息:\n"
+        "1. 【國泰世華】您的銀行賬戶顯示異常，請立即登入綁定用戶資料，否則賬戶將凍結使用 www.cathay-bk.com\n"
+        "2. 我朋友參加攝影比賽麻煩幫忙投票 http://www.yahoonikk.info/page/vote.pgp?pid=51\n"
+        "3. 登入FB就投票成功了我手機當機 line用不了 想請你幫忙安全認證 幫我收個認證簡訊 謝謝 你LINE的登陸認證密碼記得嗎 認證要用到 確認是本人幫忙認證 www.fake-url.com\n"
+        "4. 您的LINE已違規使用，將在24小時內註銷，請使用谷歌瀏覽器登入電腦網站並掃碼驗證解除違規 www.line-wbe.icu\n"
+        "5. 【台灣自來水公司】貴戶本期水費已逾期，總計新台幣395元整，務請於6月16日前處理繳費，詳情繳費：https://bit.ly/4cnMNtE 若再超過上述日期，將終止供水\n"
+        "請生成類似的詐騙訊息模板，並確保其具有教育性質。"
+    )
+    
+    response = genai.generate(text=prompt, num_generations=1)
+    return response.generations[0]['text']
 
 def analyze_response(text):
     # 這裡是您的分析邏輯，根據詐騙訊息給出辨別建議
