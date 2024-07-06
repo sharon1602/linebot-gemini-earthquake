@@ -92,26 +92,27 @@ async def handle_callback(request: Request):
         user_score = fdb.get(user_score_path, None) or 0
 
         if text == "出題":
-            scam_example, correct_example = generate_examples()
-            messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
-            fdb.put_async(user_chat_path, None, messages)
-            reply_msg = f"詐騙訊息:\n\n{scam_example}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+            scam_example, correct_example, is_scam = generate_examples()
+            message_to_send = scam_example if is_scam else correct_example
+            fdb.put_async(user_chat_path, None, {'message': message_to_send, 'is_scam': is_scam})
+            reply_msg = f"訊息:\n\n{message_to_send}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
         elif text in ["是", "否"]:
-            if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
-                scam_message, correct_message = chatgpt[-1]['parts']
-                if (text == "是" and scam_message) or (text == "否" and not scam_message):
+            if chatgpt and 'message' in chatgpt and 'is_scam' in chatgpt:
+                is_scam = chatgpt['is_scam']
+                user_response = text == "是"
+                if user_response == is_scam:
                     user_score += 50
                     fdb.put_async(user_score_path, None, user_score)
                     reply_msg = f"你好棒！你答對了，當前分數是：{user_score}分"
                 else:
-                    advice = analyze_response(scam_message)
-                    reply_msg = f"這是詐騙訊息。詐騙訊息分析:\n\n{advice}\n\n你的當前分數是：{user_score}分"
+                    advice = analyze_response(chatgpt['message'])
+                    reply_msg = f"這是{'詐騙' if is_scam else '真實'}訊息。訊息分析:\n\n{advice}\n\n你的當前分數是：{user_score}分"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
         elif text == "分數":
             reply_msg = f"你的當前分數是：{user_score}分"
         else:
-            reply_msg = '我不清楚您的問題請再次提問。'
+            reply_msg = '未能識別的指令，請輸入「出題」生成一個訊息範例，或輸入「是」或「否」來判斷上一個生成的範例，或輸入「分數」查看當前積分。'
 
         await line_bot_api.reply_message(
             ReplyMessageRequest(
@@ -122,27 +123,33 @@ async def handle_callback(request: Request):
     return 'OK'
 
 def generate_examples():
+    is_scam = random.choice([True, False])
     scam_template = random.choice(scam_templates)
-    prompt_scam = (
-        f"以下是一個詐騙訊息範例:\n\n{scam_template}\n\n"
-        "請根據這個範例生成一個新的、類似的詐騙訊息。保持相似的結構和風格，"
-        "但改變具體內容。請確保新生成的訊息具有教育性質，可以用於提高人們對詐騙的警惕性。"
-        "只需要生成詐騙訊息本身，不要添加任何額外的說明或指示。"
-    )
-    prompt_correct = (
-        f"以下是一些真實且正確的訊息範例，其風格和結構類似於以下的詐騙訊息範例，但內容是真實且正確的:\n\n"
-        "Gap夏季盛典⭐全面4折起⭐上班穿搭從容通勤，下班換上神短褲🩳到LINE查詢會員點數抵消費 https://maac.io/20nHK\n"
-        "【中華電信網路門市優惠通知】3月起精彩運動賽事BWF全英公開賽、MLB等即將開打！Hami Video影視雙享包含超過100個頻道(運動、新聞、生活等)+萬部電影、戲劇，每月僅$188起，最高再贈8GB/月上網量！追劇好康雙享不錯過，立即了解→ https://cht.tw/x/5qud8\n"
-        "【momo年末應援】有錢快領100元購物金！全館商品現折$100，提醒購物金效期有限，手刀搶購 https://momo.dm/uVbyf3\n"
-        "警政署提醒您，詐團盜用名人照片投放投資廣告吸引加LINE群組，群組成員多為詐團暗樁，切勿輕易相信，詳見：165.npa.gov.tw。\n"
-        "9/14起中友購物節全館滿仟贈點！獨享會員禮、15大指定銀行刷卡禮、扣10點抽百萬經典豪車！ https://reurl.cc/jvq99D\n\n"
-        f"請生成一個真實且正確的訊息範例，其風格和結構類似於以下的詐騙訊息範例，但內容是真實且正確的:\n\n{scam_template}"
-    )
-
+    if is_scam:
+        prompt = (
+            f"以下是一個詐騙訊息範例:\n\n{scam_template}\n\n"
+            "請根據這個範例生成一個新的、類似的詐騙訊息。保持相似的結構和風格，"
+            "但改變具體內容。請確保新生成的訊息具有教育性質，可以用於提高人們對詐騙的警惕性。"
+            "只需要生成詐騙訊息本身，不要添加任何額外的說明或指示。"
+        )
+    else:
+        prompt = (
+            "以下是一些真實且正確的訊息範例，其風格和結構類似於以下的詐騙訊息範例，但內容是真實且正確的:\n\n"
+            "Gap夏季盛典⭐全面4折起⭐上班穿搭從容通勤，下班換上神短褲🩳到LINE查詢會員點數抵消費 https://maac.io/20nHK\n"
+            "【中華電信網路門市優惠通知】3月起精彩運動賽事BWF全英公開賽、MLB等即將開打！Hami Video影視雙享包含超過100個頻道(運動、新聞、生活等)+萬部電影、戲劇，每月僅$188起，最高再贈8GB/月上網量！追劇好康雙享不錯過，立即了解→ https://cht.tw/x/5qud8\n"
+            "【momo年末應援】有錢快領100元購物金！全館商品現折$100，提醒購物金效期有限，手刀搶購 https://momo.dm/uVbyf3\n"
+            "警政署提醒您，詐團盜用名人照片投放投資廣告吸引加LINE群組，群組成員多為詐團暗樁，切勿輕信。務必通報165 https://165.gov.tw\n"
+            "【Taipower 台電】💡新電力繳費平台啟用，輕鬆管理您的用電狀況及賬單繳納。登入平台享首月免費服務：https://taipower.com.tw/newbilling"
+            "\n\n請生成一個新的、真實且正確的訊息。保持相似的結構和風格，"
+            "但改變具體內容。確保新生成的訊息真實且正確。"
+            "只需要生成真實訊息本身，不要添加任何額外的說明或指示。"
+        )
+    
     model = genai.GenerativeModel('gemini-pro')
-    scam_response = model.generate_content(prompt_scam)
-    correct_response = model.generate_content(prompt_correct)
-    return scam_response.text.strip(), correct_response.text.strip()
+    response = model.generate_content(prompt)
+    generated_message = response.text.strip()
+
+    return scam_template, generated_message, is_scam
 
 def analyze_response(text):
     prompt = (
