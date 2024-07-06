@@ -20,6 +20,18 @@ import requests
 import google.generativeai as genai
 from firebase import firebase
 import random
+import pandas as pd
+
+# Load the CSV file
+csv_file_path = '/mnt/data/165 Anti-Fraud Consultation Websites.csv'
+csv_data = pd.read_csv(csv_file_path)
+
+# Load the XML file
+xml_file_path = '/mnt/data/通報TWNIC詐騙網址彙整表.xml'
+xml_data = pd.read_xml(xml_file_path)
+
+# Display the first few rows of each dataset to understand their structure
+csv_data.head(), xml_data.head()
 
 logging.basicConfig(level=os.getenv('LOG', 'WARNING'))
 logger = logging.getLogger(__file__)
