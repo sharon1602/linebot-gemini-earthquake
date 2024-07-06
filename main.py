@@ -84,25 +84,31 @@ async def handle_callback(request: Request):
         fdb = firebase.FirebaseApplication(firebase_url, None)
         if event.source.type == 'group':
             user_chat_path = f'chat/{event.source.group_id}'
+            user_score_path = f'scores/{event.source.group_id}_{user_id}'
         else:
             user_chat_path = f'chat/{user_id}'
+            user_score_path = f'scores/{user_id}'
         chatgpt = fdb.get(user_chat_path, None)
 
         if text == "出題":
             scam_example, correct_example = generate_examples()
             messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
             fdb.put_async(user_chat_path, None, messages)
-            reply_msg = f"詐騙訊息:\n\n{scam_example}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+            reply_msg = f"詐騙訊息:\n\n{scam_example}\n\n請判斷這是否為詐騙訊息（回覆'是'或'否'）"
         elif text in ["是", "否"]:
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 scam_message, correct_message = chatgpt[-1]['parts']
                 if (text == "是" and scam_message) or (text == "否" and not scam_message):
-                    reply_msg = "你好棒！"
+                    add_score(user_score_path, 50)
+                    reply_msg = "你好棒！你獲得了50分！"
                 else:
                     advice = analyze_response(scam_message)
                     reply_msg = f"這是詐騙訊息。詐騙訊息分析:\n\n{advice}"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
+        elif text == "分數":
+            score = get_score(user_score_path)
+            reply_msg = f"你的目前積分是: {score} 分"
         else:
             reply_msg = '未能識別的指令，請輸入「出題」生成一個詐騙訊息範例，或輸入「是」或「否」來判斷上一個生成的範例。'
 
@@ -133,23 +139,25 @@ def generate_examples():
 
 def analyze_response(text):
     prompt = (
-        f"以下是一個潛在的詐騙訊息:\n\n{text}\n\n"
+        f"以下是一個潛在的詜騙訊息:\n\n{text}\n\n"
         "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
         "1. 這條訊息中的可疑元素\n"
         "2. 為什麼這些元素是可疑的\n"
         "3. 如何識別類似的詐騙訊息\n"
         "4. 面對這種訊息時應該採取什麼行動\n"
-        "請以教育性和提醒性的語氣回答，幫助人們提高警惕。"
-        "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
+        "請以教育性和提醒性的語氣回答，幫助人們提高警惕。絕對不要使用任何粗體或任何特殊格式，例如markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
     )
     
     model = genai.GenerativeModel('gemini-pro')
     response = model.generate_content(prompt)
     return response.text.strip()
 
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', default=8080))
-    debug = True if os.environ.get(
-        'API_ENV', default='develop') == 'develop' else False
-    logging.info('Application will start...')
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=debug)
+def add_score(user_score_path, score_to_add):
+    current_score = get_score(user_score_path)
+    new_score = current_score + score_to_add
+    fdb.put_async(user_score_path, "score", new_score)
+
+def get_score(user_score_path):
+    score = fdb.get(user_score_path, "score")
+    if score is None:
+        return
