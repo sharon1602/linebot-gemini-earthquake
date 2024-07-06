@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
@@ -96,7 +97,7 @@ async def handle_callback(request: Request):
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 scam_message = chatgpt[-1]['parts'][0]
                 advice = analyze_response(scam_message)
-                reply_msg = f'詐騙訊息分析:\n\n{advice}'
+                reply_msg = f'上次的詐騙訊息是: {scam_message}\n\n辨別建議:\n{advice}'
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
         else:
@@ -123,19 +124,35 @@ def generate_scam_example():
     return response.text
 
 def analyze_response(text):
-    prompt = (
-        f"以下是一個潛在的詐騙訊息:\n\n{text}\n\n"
-        "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
-        "1. 這條訊息中的可疑元素\n"
-        "2. 為什麼這些元素是可疑的\n"
-        "3. 如何識別類似的詐騙訊息\n"
-        "4. 面對這種訊息時應該採取什麼行動\n"
-        "請以教育性和提醒性的語氣回答，幫助人們提高警惕。"
-    )
+    advice = []
+    # Check for suspicious URLs
+    if re.search(r'\bwww\.[a-zA-Z0-9-]+\.[a-z]{2,}\b', text):
+        advice.append("這條訊息包含可疑的網址，請勿點擊。")
     
-    model = genai.GenerativeModel('gemini-pro')
-    response = model.generate_content(prompt)
-    return response.text
+    # Check for urgency or threat language
+    if re.search(r'\b(逾期|凍結|註銷|終止供水|停止收費|登入|認證|綁定用戶資料|立即|緊急)\b', text):
+        advice.append("訊息中包含緊急措辭，這是常見的詐騙手段。")
+    
+    # Check for inducement phrases
+    if re.search(r'\b(點擊此處|請立即|詳情繳費|免費|下載|活動|投票)\b', text):
+        advice.append("訊息中包含誘導性語句，這可能是詐騙。")
+    
+    # Check for unsolicited requests
+    if re.search(r'\b(幫忙|要求|收個認證|麻煩幫忙|確認是本人幫忙認證|幫忙認證)\b', text):
+        advice.append("訊息中包含不明請求，這可能是詐騙手段之一。")
+    
+    # Check for uncommon domain extensions
+    if re.search(r'\.(icu|info|bit|pgp|shop)\b', text):
+        advice.append("訊息中包含不常見的域名擴展，請小心。")
+
+    # Check for signs of phishing (e.g., login, account details)
+    if re.search(r'\b(登入|用戶資料|帳戶|賬戶|安全認證)\b', text):
+        advice.append("訊息中要求提供帳戶或個人資料，這可能是網絡釣魚詐騙。")
+    
+    if not advice:
+        advice.append("這條訊息看起來很可疑，請小心處理。")
+
+    return "\n".join(advice)
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', default=8080))
