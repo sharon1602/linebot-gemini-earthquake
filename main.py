@@ -72,6 +72,7 @@ async def handle_callback(request: Request):
             scam_example, correct_example = generate_examples()
             messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
             fdb.put_async(f'chat/{user_id}', None, messages)
+            fdb.put_async(f'answered/{user_id}', None, False)  # 設置用戶未回答狀態
             reply_msg = f"{scam_example}\n\n請判斷這是否為詐騙訊息"
             confirm_template = ConfirmTemplate(
                 text='請判斷是否為詐騙訊息。',
@@ -86,6 +87,12 @@ async def handle_callback(request: Request):
             reply_msg = f"你的當前分數是：{user_score}分"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
         elif event.message.text in ['是', '否']:
+            answered = fdb.get(f'answered/{user_id}', None)
+            if answered:
+                reply_msg = '你已經回答過了，請先輸入「出題」生成新範例。'
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+                continue
+            
             chatgpt = fdb.get(f'chat/{user_id}', None)
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 scam_message, correct_message = chatgpt[-1]['parts']
@@ -98,14 +105,30 @@ async def handle_callback(request: Request):
                     reply_msg = f"你好棒！你的當前分數是：{user_score}分"
                 else:
                     user_score -= 50
-                    if user_score < 50:
+                    if user_score < 0:
                         user_score = 0
                     fdb.put_async(user_score_path, None, user_score)
-                    advice = analyze_response(scam_message if is_scam else correct_message, is_scam, user_response)
-                    reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
+                    if is_scam:
+                        reply_msg = f"這是詐騙訊息。請點選解析了解更多。"
+                    else:
+                        advice = analyze_response(correct_message, is_scam, user_response)
+                        reply_msg = f"這是正確訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
+
+                fdb.put_async(f'answered/{user_id}', None, True)  # 設置用戶已回答狀態
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+        elif event.message.text == "解析":
+            chatgpt = fdb.get(f'chat/{user_id}', None)
+            if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
+                scam_message, correct_message = chatgpt[-1]['parts']
+                is_scam = scam_message is not None
+                advice = analyze_response(scam_message if is_scam else correct_message, is_scam, True)
+                reply_msg = f"分析如下:\n\n{advice}"
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+            else:
+                reply_msg = '請先回答「是」或「否」來判斷詐騙訊息，再查看解析。'
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
         elif event.message.text == "排行榜":
             reply_msg = get_rank(user_id, firebase_url)
@@ -129,105 +152,44 @@ def generate_examples():
     )
 
     model = genai.GenerativeModel('gemini-pro')
-    scam_response = model.generate_content(prompt_scam)
-    correct_response = model.generate_content(prompt_correct)
-    return scam_response.text.strip(), correct_response.text.strip()
+    response_scam = model.generate(text=prompt_scam, temperature=0.7, max_output_tokens=300)
+    response_correct = model.generate(text=prompt_correct, temperature=0.7, max_output_tokens=300)
 
-def analyze_response(text, is_scam, user_response):
-    if user_response == is_scam:
-        # 如果用户回答正确
-        if is_scam:
-            prompt = (
-                f"以下是一個詐騙訊息:\n\n{text}\n\n"
-                "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的可疑元素\n"
-                "2. 為什麼這些元素是可疑的\n"
-                "3. 如何識別類似的詐騙訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高警惕。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
-        else:
-            prompt = (
-                f"以下是一個真實且正確的訊息:\n\n{text}\n\n"
-                "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的真實元素\n"
-                "2. 為什麼這些元素是真實的\n"
-                "3. 如何識別類似的真實訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高辨別真實訊息的能力。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
+    scam_example = response_scam.generations[0].text.strip()
+    correct_example = response_correct.generations[0].text.strip()
+
+    return scam_example, correct_example
+
+def analyze_response(message, is_scam, user_response):
+    if is_scam:
+        advice = "這是一個典型的詐騙訊息，請注意以下幾點：\n\n"
+        advice += "1. 不明網址：詐騙訊息通常包含可疑或不明的連結。\n"
+        advice += "2. 緊急性：詐騙訊息常使用恐嚇或緊急語氣，迫使收信人立即行動。\n"
+        advice += "3. 語法和拼寫錯誤：詐騙訊息往往包含語法和拼寫錯誤。\n"
     else:
-        # 如果用户回答错误
-        if is_scam:
-            prompt = (
-                f"以下是一個詐騙訊息:\n\n{text}\n\n"
-                "用教育性和提醒性的語氣，指出這是詐騙訊息。請提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的可疑元素\n"
-                "2. 為什麼這些元素是可疑的\n"
-                "3. 如何識別類似的詐騙訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高警惕。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
-        else:
-            prompt = (
-                f"以下是一個真實且正確的訊息:\n\n{text}\n\n"
-                "用教育性和提醒性的語氣，指出這是真實且正確的訊息。請提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的真實元素\n"
-                "2. 為什麼這些元素是真實的\n"
-                "3. 如何識別類似的真實訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高辨別真實訊息的能力。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
-    model = genai.GenerativeModel('gemini-pro')
-    response = model.generate_content(prompt)
-    return response.text.strip()
+        advice = "這是一個真實的訊息，請注意以下幾點：\n\n"
+        advice += "1. 正規的發送者：訊息通常來自官方或可信賴的發送者。\n"
+        advice += "2. 無緊急性：真實訊息不會使用恐嚇或緊急語氣。\n"
+        advice += "3. 正確的語法和拼寫：真實訊息的語法和拼寫通常都是正確的。\n"
+    return advice
 
-def get_sorted_scores(firebase_url, path):
+def get_rank(user_id, firebase_url):
     fdb = firebase.FirebaseApplication(firebase_url, None)
-    scores = fdb.get(path, None)
-    
-    if scores:
-        score_list = [(user, score) for user, score in scores.items()]
-        sorted_score_list = sorted(score_list, key=lambda x: x[1], reverse=True)
-        return sorted_score_list
-    else:
-        return []
-
-def get_rank(current_user_id, firebase_url):
-    rank_width = 7
-    user_width = 14
-    score_width = 11
-    total_width = rank_width + user_width + score_width + 4
-
-    sorted_scores = get_sorted_scores(firebase_url, 'scores/')
-
-    table_str = ''
-
-    table_str += '+' + '-' * total_width + '+\n'
-    table_str += '|' + "排行榜".center(total_width - 3) + '|\n'
-    table_str += '+' + '-' * total_width + '+\n'
-    table_str += f"|{'排名'.center(rank_width)}|{'User'.center(user_width)}|{'Score'.center(score_width)}|\n"
-    table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
-
-    if sorted_scores:
-        i = 1
-        for user, score in sorted_scores:
-            if user == current_user_id:
-                user_display = f'*{user[:user_width]}*'
-            else:
-                user_display = user[:5]
-
-            table_str += f"|{str(i).center(rank_width)}|{user_display.center(user_width)}|{str(score).center(score_width)}|\n"
-            table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
-            i += 1
-    else:
-        table_str += '|' + '目前無人上榜'.center(total_width) + '|\n'
-        table_str += '+' + '-' * total_width + '+\n'
-    return table_str
+    scores = fdb.get('/scores', None)
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    rank = 1
+    user_score = 0
+    rank_msg = ""
+    for uid, score in sorted_scores:
+        rank_msg += f"{rank}. User: {uid[-5:]} - Score: {score}\n"
+        if uid == user_id:
+            user_score = score
+        rank += 1
+    if user_id not in scores:
+        user_score = 0
+    rank_msg += f"\n你的分數是: {user_score}\n"
+    return rank_msg
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv('PORT', 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
