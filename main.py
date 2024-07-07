@@ -98,15 +98,15 @@ async def handle_callback(request: Request):
                 message = correct_example
             messages = [{'role': 'bot', 'parts': [message], 'is_scam': is_scam}]
             fdb.put_async(user_chat_path, None, messages)
-            reply_msg = f"訊息:\n\n{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+            reply_msg = f"{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否')❗️❗️"
         elif text == "分數":
-            reply_msg = f"你的當前分數是：{user_score}分"
+            reply_msg = f"你的當前分數是：{user_score}分 👍"
         elif text == "解析":
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 message = chatgpt[-1]['parts'][0]
                 is_scam = chatgpt[-1]['is_scam']
                 advice = analyze_response(message, is_scam, is_scam)
-                reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。分析如下:\n\n{advice}"
+                reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。❗️\n如下:\n\n{advice}"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
         elif text in ["是", "否"]:
@@ -118,10 +118,10 @@ async def handle_callback(request: Request):
                 if user_response == is_scam:
                     user_score += 50
                     fdb.put_async(user_score_path, None, user_score)
-                    reply_msg = f"你好棒！你的當前分數是：{user_score}分"
+                    reply_msg = f"你好棒！🥳 你的當前分數是：{user_score}分❗️"
                 else:
                     if user_score < 50:
-                        reply_msg = "您目前分數為0分！請加油！"
+                        reply_msg = "您目前分數為0分！請加油！🥺"
                     else:
                         user_score -= 50
                         fdb.put_async(user_score_path, None, user_score)
