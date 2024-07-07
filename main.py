@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 from linebot import (
     LineBotApi, WebhookParser
 )
+from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage, ConfirmTemplate, MessageAction, TemplateSendMessage
 )
-from linebot.exceptions import InvalidSignatureError
 from firebase import firebase
 import random
 import uvicorn
@@ -21,9 +21,9 @@ logger = logging.getLogger(__file__)
 app = FastAPI()
 
 load_dotenv()
-channel_secret = os.getenv('LINE_CHANNEL_SECRET')
-channel_access_token = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
-if not channel_secret or not channel_access_token:
+channel_secret = os.getenv('LINE_CHANNEL_SECRET', None)
+channel_access_token = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', None)
+if channel_secret is None or channel_access_token is None:
     logger.error('Specify LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN as environment variables.')
     sys.exit(1)
 
@@ -60,27 +60,21 @@ async def handle_callback(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     for event in events:
-        if not isinstance(event, MessageEvent):
-            continue
-        if not isinstance(event.message, TextMessage):
+        if not isinstance(event, MessageEvent) or not isinstance(event.message, TextMessage):
             continue
 
         user_id = event.source.user_id
         fdb = firebase.FirebaseApplication(firebase_url, None)
+        user_score_path = f'scores/{user_id}'
+        user_score = fdb.get(user_score_path, None) or 0
 
         if event.message.text == '出題':
             scam_example, correct_example = generate_examples()
             messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
             fdb.put_async(f'chat/{user_id}', None, messages)
-            confirm_template = ConfirmTemplate(
-                text='您確定嗎？',
-                actions=[
-                    MessageAction(label='是', text='是'),
-                    MessageAction(label='否', text='否')
-                ]
-            )
-            return TemplateSendMessage(alt_text='出題', template=confirm_template)
-        
+            reply_msg = f"訊息:\n\n{scam_example}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+        elif event.message.text == '分數':
+            reply_msg = f"你的當前分數是：{user_score}分"
         elif event.message.text in ['是', '否']:
             chatgpt = fdb.get(f'chat/{user_id}', None)
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
@@ -89,19 +83,20 @@ async def handle_callback(request: Request):
                 user_response = event.message.text == '是'
 
                 if user_response == is_scam:
-                    user_score = fdb.get(f'scores/{user_id}', None) or 0
                     user_score += 50
-                    fdb.put_async(f'scores/{user_id}', None, user_score)
+                    fdb.put_async(user_score_path, None, user_score)
                     reply_msg = f"你好棒！你的當前分數是：{user_score}分"
                 else:
-                    user_score = fdb.get(f'scores/{user_id}', None) or 0
                     user_score -= 50
-                    fdb.put_async(f'scores/{user_id}', None, user_score)
+                    fdb.put_async(user_score_path, None, user_score)
+                    advice = analyze_response(scam_message if is_scam else correct_message, is_scam, user_response)
                     reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
+        else:
+            reply_msg = '請先回答「是」或「否」來判斷詐騙訊息，再查看解析。'
 
-            return TextSendMessage(text=reply_msg)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
 
     return 'OK'
 
@@ -121,6 +116,29 @@ def generate_examples():
     scam_response = model.generate_content(prompt_scam)
     correct_response = model.generate_content(prompt_correct)
     return scam_response.text.strip(), correct_response.text.strip()
+
+def analyze_response(text, is_scam, user_response):
+    if user_response == is_scam:
+        if is_scam:
+            prompt = (
+                f"以下是一個詐騙訊息:\n\n{text}\n\n"
+                "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
+                "1. 這條訊息中的可疑元素\n"
+                "2. 為什麼這些元素是可疑的\n"
+                "3. 如何識別類似的詐騙訊息\n"
+                "4. 面對這種訊息時應該採取什麼行動\n"
+                "請以教育性和提高警覺性的角度回答。"
+            )
+        else:
+            prompt = (
+                f"以下是一條真實且正確的訊息:\n\n{text}\n\n"
+                "請分析這條訊息，並提供詳細的解釋，說明這條訊息是真實且正確的，"
+                "包括內容的合理性、可信度來源等。"
+            )
+
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt)
+        return response.text.strip()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
