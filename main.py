@@ -92,13 +92,21 @@ async def handle_callback(request: Request):
         if text == "出題":
             scam_example, correct_example = generate_examples()
             is_scam = random.choice([True, False])
-            if is_scam:
-                message = scam_example
+            if chatgpt and 'corrected' in chatgpt[-1]:
+                # 如果上一條訊息被糾正過，重新出題
+                corrected_message = chatgpt[-1]['corrected']
+                is_scam = chatgpt[-1]['corrected_is_scam']
+                messages = [{'role': 'bot', 'parts': [corrected_message], 'is_scam': is_scam}]
+                fdb.put_async(user_chat_path, None, messages)
+                reply_msg = f"訊息:\n\n{corrected_message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
             else:
-                message = correct_example
-            messages = [{'role': 'bot', 'parts': [message], 'is_scam': is_scam}]
-            fdb.put_async(user_chat_path, None, messages)
-            reply_msg = f"{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+                if is_scam:
+                    message = scam_example
+                else:
+                    message = correct_example
+                messages = [{'role': 'bot', 'parts': [message], 'is_scam': is_scam}]
+                fdb.put_async(user_chat_path, None, messages)
+                reply_msg = f"{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
         elif text == "分數":
             reply_msg = f"你的當前分數是：{user_score}分"
         elif text == "解析":
@@ -137,6 +145,9 @@ async def handle_callback(request: Request):
                 if correction in ["是", "否"]:
                     corrected_is_scam = correction == "是"
                     update_model(message, corrected_is_scam)
+                    chatgpt[-1]['corrected'] = message
+                    chatgpt[-1]['corrected_is_scam'] = corrected_is_scam
+                    fdb.put_async(user_chat_path, None, chatgpt)
                     reply_msg = f"已記錄您的糾正，感謝您的反饋！這條訊息已標記為{'詐騙' if corrected_is_scam else '正確'}訊息。"
                 else:
                     reply_msg = '糾正格式錯誤，請使用「糾正 是」或「糾正 否」進行糾正。'
@@ -148,23 +159,23 @@ async def handle_callback(request: Request):
         await line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_msg)]
-            ))
-
-    return 'OK'
+                messages=[
+                    TextMessage(
+                        text=reply_msg
+                    )
+                ]
+            )
+        )
 
 def generate_examples():
-    scam_template = random.choice(scam_templates)
     prompt_scam = (
-        f"以下是一個詐騙訊息範例:\n\n{scam_template}\n\n"
-        "請根據這個範例生成一個新的、類似的詐騙訊息。保持相似的結構和風格，"
-        "但改變具體內容。請確保新生成的訊息具有教育性質，可以用於提高人們對詐騙的警惕性。"
-        "只需要生成詐騙訊息本身，不要添加任何額外的說明或指示。"
+        "生成一個詐騙訊息範例。請注意，這條訊息應該是以詐騙為目的，並包含誘導性、虛假或令人感到緊急的內容，"
+        "例如銀行詐騙、假冒官員、假冒朋友等。這條訊息將用於教育和提醒人們如何辨別詐騙訊息。\n\n"
+        f"{random.choice(scam_templates)}"
     )
     prompt_correct = (
-        f"請生成一個真實且正確的訊息範例，其風格和結構類似於以下這些詐騙訊息範例，但內容必須是真實且正確的，"
-        "例如銀行通知、官方公告或其他合法的信息。請確保生成的訊息能夠用於教育和提醒人們如何辨別真實信息。\n\n"
-        f"{random.choice(scam_templates)}"
+        "生成一個真實且正確的訊息範例。請確保這條訊息與下列詐騙訊息範例相似，但內容必須是真實且正確的，"
+        "例如銀行通知、官方公告或其他合法的信息。請確保生成的訊息能夠用於教育和提醒人們如何辨別真實信息。"
     )
     model = genai.GenerativeModel('gemini-pro')
     scam_example = model.generate_content(prompt_scam).text.strip()
