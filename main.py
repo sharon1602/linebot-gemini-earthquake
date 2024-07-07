@@ -98,7 +98,7 @@ async def handle_callback(request: Request):
                 message = correct_example
             messages = [{'role': 'bot', 'parts': [message], 'is_scam': is_scam}]
             fdb.put_async(user_chat_path, None, messages)
-            reply_msg = f"訊息:\n\n{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+            reply_msg = f"{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
         elif text == "分數":
             reply_msg = f"你的當前分數是：{user_score}分"
         elif text == "解析":
