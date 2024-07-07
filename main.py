@@ -69,15 +69,19 @@ async def handle_callback(request: Request):
         user_score = fdb.get(user_score_path, None) or 0
 
         if event.message.text == '出題':
+            scam_example, correct_example = generate_examples()
+            messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
+            fdb.put_async(f'chat/{user_id}', None, messages)
+            reply_msg = f"{scam_example}\n\n請判斷這是否為詐騙訊息"
             confirm_template = ConfirmTemplate(
-                text='這是一個詐騙訊息範例，請判斷是否為詐騙訊息。',
+                text='請判斷是否為詐騙訊息。',
                 actions=[
                     MessageAction(label='是', text='是'),
                     MessageAction(label='否', text='否')
                 ]
             )
             template_message = TemplateSendMessage(alt_text='出題', template=confirm_template)
-            line_bot_api.reply_message(event.reply_token, template_message)
+            line_bot_api.reply_message(event.reply_token, [TextSendMessage(text=reply_msg), template_message])
         elif event.message.text == '分數':
             reply_msg = f"你的當前分數是：{user_score}分"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
@@ -129,11 +133,7 @@ def analyze_response(text, is_scam, user_response):
         if is_scam:
             prompt = (
                 f"以下是一個詐騙訊息:\n\n{text}\n\n"
-                "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的可疑元素。\n"
-                "2. 如何判斷這條訊息是詐騙訊息。\n"
-                "3. 相對應的應對策略。\n"
-                "請回答上述問題，以協助他人辨識和處理類似訊息。"
+                "請解釋這條訊息是如何詐騙的，並提供相應的應對策略。"
             )
         else:
             prompt = (
@@ -145,6 +145,8 @@ def analyze_response(text, is_scam, user_response):
         model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
         return response.text.strip()
+    else:
+        return "無法分析，請提供正確的回答"
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
