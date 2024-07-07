@@ -69,12 +69,18 @@ async def handle_callback(request: Request):
         user_score = fdb.get(user_score_path, None) or 0
 
         if event.message.text == '出題':
-            scam_example, correct_example = generate_examples()
-            messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
-            fdb.put_async(f'chat/{user_id}', None, messages)
-            reply_msg = f"{scam_example}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+            confirm_template = ConfirmTemplate(
+                text='這是一個詐騙訊息範例，請判斷是否為詐騙訊息。',
+                actions=[
+                    MessageAction(label='是', text='是'),
+                    MessageAction(label='否', text='否')
+                ]
+            )
+            template_message = TemplateSendMessage(alt_text='出題', template=confirm_template)
+            line_bot_api.reply_message(event.reply_token, template_message)
         elif event.message.text == '分數':
             reply_msg = f"你的當前分數是：{user_score}分"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
         elif event.message.text in ['是', '否']:
             chatgpt = fdb.get(f'chat/{user_id}', None)
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
@@ -91,12 +97,13 @@ async def handle_callback(request: Request):
                     fdb.put_async(user_score_path, None, user_score)
                     advice = analyze_response(scam_message if is_scam else correct_message, is_scam, user_response)
                     reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
         else:
             reply_msg = '請先回答「是」或「否」來判斷詐騙訊息，再查看解析。'
-
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
 
     return 'OK'
 
@@ -123,11 +130,10 @@ def analyze_response(text, is_scam, user_response):
             prompt = (
                 f"以下是一個詐騙訊息:\n\n{text}\n\n"
                 "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的可疑元素\n"
-                "2. 為什麼這些元素是可疑的\n"
-                "3. 如何識別類似的詐騙訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提高警覺性的角度回答。"
+                "1. 這條訊息中的可疑元素。\n"
+                "2. 如何判斷這條訊息是詐騙訊息。\n"
+                "3. 相對應的應對策略。\n"
+                "請回答上述問題，以協助他人辨識和處理類似訊息。"
             )
         else:
             prompt = (
