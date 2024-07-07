@@ -14,6 +14,7 @@ from firebase import firebase
 import random
 import uvicorn
 import google.generativeai as genai
+import uuid
 
 logging.basicConfig(level=os.getenv('LOG', 'WARNING'))
 logger = logging.getLogger(__file__)
@@ -44,15 +45,6 @@ scam_templates = [
     "【台灣電力股份有限公司】貴戶本期電費已逾期，總計新台幣1058元整，務請於6月14日前處理繳費，詳情繳費：(網址)，若再超過上述日期，將停止收費"
 ]
 
-true_templates = [
-    "Gap夏季盛典⭐全面4折起⭐上班穿搭從容通勤，下班換上神短褲🩳到LINE查詢會員點數抵消費 https://maac.io/20nHK ",
-    "【中華電信網路門市優惠通知】3月起精彩運動賽事BWF全英公開賽、MLB等即將開打！Hami Video影視雙享包含超過100個頻道(運動、新聞、生活等)+萬部電影、戲劇，每月僅$188起，最高再贈8GB/月上網量！追劇好康雙享不錯過，立即了解→ https://cht.tw/x/5qud8",
-    "【momo年末應援】有錢快領100元購物金！全館商品現折$100，提醒購物金效期有限，手刀搶購 https://momo.dm/uVbyf3",
-    "警政署提醒您，詐團盜用名人照片投放投資廣告吸引加LINE群組，群組成員多為詐團暗樁，切勿輕易相信，詳見：165.npa.gov.tw。",
-    "9/14起中友購物節全館滿仟贈點！獨享會員禮、15大指定銀行刷卡禮、扣10點抽百萬經典豪車！ https://reurl.cc/jvq99D",
-    "【恭喜您獲得加碼資格！】感謝您使用台新信用卡，請於收到本簡訊3天內首登Richart Life APP tsbk.tw/3z7vxy/ 點擊「我的」>「輸入推薦碼」輸入「CARD30」即贈限量刷卡金30元！謹慎理財信用至上循環利率6.75%-15%",
-    "【跨年LINE POINTS一把抓】貼圖、美食優惠券，完成任務讓你點數領不完，都在台新LINE https://tsbk.tw/5fnvc9"
-]
 @app.get("/health")
 async def health():
     return 'ok'
@@ -79,14 +71,15 @@ async def handle_callback(request: Request):
 
         if event.message.text == '出題':
             scam_example, correct_example = generate_examples()
-            messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
+            question_id = str(uuid.uuid4())
+            messages = [{'role': 'bot', 'question_id': question_id, 'parts': [scam_example, correct_example]}]
             fdb.put_async(f'chat/{user_id}', None, messages)
             reply_msg = f"{scam_example}\n\n請判斷這是否為詐騙訊息"
             confirm_template = ConfirmTemplate(
                 text='請判斷是否為詐騙訊息。',
                 actions=[
-                    MessageAction(label='是', text='是'),
-                    MessageAction(label='否', text='否')
+                    MessageAction(label='是', text=f'是_{question_id}'),
+                    MessageAction(label='否', text=f'否_{question_id}')
                 ]
             )
             template_message = TemplateSendMessage(alt_text='出題', template=confirm_template)
@@ -94,35 +87,38 @@ async def handle_callback(request: Request):
         elif event.message.text == '分數':
             reply_msg = f"你的當前分數是：{user_score}分"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
-        elif event.message.text in ['是', '否']:
+        elif event.message.text.startswith('是_') or event.message.text.startswith('否_'):
+            response, question_id = event.message.text.split('_')
+            user_response = response == '是'
             chatgpt = fdb.get(f'chat/{user_id}', None)
-            if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
-                if fdb.get(f'answers/{user_id}', None) is not None:
-                    reply_msg = '您已回答過，請勿重複作答。'
-                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
-                    continue
+            if chatgpt:
+                for item in chatgpt:
+                    if item['role'] == 'bot' and item['question_id'] == question_id:
+                        if fdb.get(f'answers/{user_id}/{question_id}', None) is not None:
+                            reply_msg = '您已回答過，請勿重複作答。'
+                            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+                            continue
 
-                scam_message, correct_message = chatgpt[-1]['parts']
-                is_scam = scam_message is not None
-                user_response = event.message.text == '是'
+                        scam_message, correct_message = item['parts']
+                        is_scam = scam_message is not None
 
-                if user_response == is_scam:
-                    user_score += 50
-                    fdb.put_async(user_score_path, None, user_score)
-                    reply_msg = f"你好棒！你的當前分數是：{user_score}分"
-                else:
-                    user_score -= 50
-                    if user_score < 50:
-                        user_score = 0
-                    fdb.put_async(user_score_path, None, user_score)
-                    if is_scam:
-                        reply_msg = f"這是詐騙訊息。請點選解析了解更多。"
-                    else:
-                        advice = analyze_response(correct_message, is_scam, user_response)
-                        reply_msg = f"這是正確訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
+                        if user_response == is_scam:
+                            user_score += 50
+                            reply_msg = f"你好棒！你的當前分數是：{user_score}分"
+                        else:
+                            user_score -= 50
+                            if user_score < 0:
+                                user_score = 0
+                            if is_scam:
+                                reply_msg = f"這是詐騙訊息。請點選解析了解更多。"
+                            else:
+                                advice = analyze_response(correct_message, is_scam, user_response)
+                                reply_msg = f"這是正確訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
 
-                fdb.put_async(f'answers/{user_id}', None, user_response)
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+                        fdb.put_async(user_score_path, None, user_score)
+                        fdb.put_async(f'answers/{user_id}/{question_id}', None, user_response)
+                        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+                        break
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
@@ -155,88 +151,48 @@ def generate_examples():
         "只需要生成詐騙訊息本身，不要添加任何額外的說明或指示。"
     )
     prompt_correct = (
-        f"請生成一個真實且正確的訊息範例，請以{true_template}為範例並且風格和結構類似於真實官方訊息為例，內容要是真實且正確的，只需要生成真實官方訊息本身，不要添加任何額外的說明或指示。"
+        f"請生成一個真實且正確的訊息範例，其風格和結構類似於以下的詐騙訊息範例，但內容是真實且正確的:\n\n{scam_template}"
     )
 
     model = genai.GenerativeModel('gemini-pro')
-    scam_response = model.generate_content(prompt_scam)
-    correct_response = model.generate_content(prompt_correct)
-    return scam_response.text.strip(), correct_response.text.strip()
+    scam_response = model.generate_content(prompt_scam, temperature=0.7, max_tokens=150)
+    correct_response = model.generate_content(prompt_correct, temperature=0.7, max_tokens=150)
 
-def analyze_response(text, is_scam, user_response):
-    if user_response == is_scam:
-        if is_scam:
-            prompt = (
-                f"以下是一個詐騙訊息範例:\n\n{text}\n\n"
-                "請分析這個訊息，並解釋為什麼它是一個詐騙訊息。"
-                "指出詐騙的特徵和可能的陷阱，以及如何識別這類詐騙。"
-            )
-        else:
-            prompt = (
-                f"以下是一個真實且正確的訊息範例:\n\n{text}\n\n"
-                "請分析這個訊息，並解釋為什麼它是真實且正確的。"
-                "指出這類訊息的可信特徵，以及如何與詐騙訊息區分。"
-            )
+    scam_example = scam_response['content'].strip()
+    correct_example = correct_response['content'].strip()
+
+    return scam_example, correct_example
+
+def analyze_response(message, is_scam, user_response):
+    if is_scam:
+        return (
+            f"這是一個典型的詐騙訊息。詐騙者常使用的手法包括:\n"
+            "- 使用緊急語氣，讓接收者感到害怕或壓力\n"
+            "- 提供看似真實但虛假的連結\n"
+            "- 要求接收者提供個人信息或進行金錢交易\n\n"
+            "請保持警惕，遇到類似訊息時，務必核實來源，並避免點擊任何可疑連結。"
+        )
     else:
-        if is_scam:
-            prompt = (
-                f"以下是一個詐騙訊息範例:\n\n{text}\n\n"
-                "請分析這個訊息，並解釋為什麼它是一個詐騙訊息。"
-                "指出詐騙的特徵和可能的陷阱，以及如何識別這類詐騙。"
-            )
-        else:
-            prompt = (
-                f"以下是一個真實且正確的訊息範例:\n\n{text}\n\n"
-                "請分析這個訊息，並解釋為什麼它是真實且正確的。"
-                "指出這類訊息的可信特徵，以及如何與詐騙訊息區分。"
-            )
+        return (
+            f"這是一個真實且正確的訊息。以下是一些判斷訊息真實性的提示:\n"
+            "- 核實發送者的身份和聯絡方式\n"
+            "- 檢查網址是否為官方網站\n"
+            "- 對於要求提供個人信息或金錢交易的訊息，務必謹慎處理\n\n"
+            "保持良好的安全習慣，有助於防止受到詐騙。"
+        )
 
-    model = genai.GenerativeModel('gemini-pro')
-    response = model.generate_content(prompt)
-    return response.text.strip()
-
-def get_sorted_scores(firebase_url, path):
+def get_rank(user_id, firebase_url):
     fdb = firebase.FirebaseApplication(firebase_url, None)
-    scores = fdb.get(path, None)
-    
-    if scores:
-        score_list = [(user, score) for user, score in scores.items()]
-        sorted_score_list = sorted(score_list, key=lambda x: x[1], reverse=True)
-        return sorted_score_list
-    else:
-        return []
-
-def get_rank(current_user_id, firebase_url):
-    rank_width = 7
-    user_width = 14
-    score_width = 11
-    total_width = rank_width + user_width + score_width + 4
-
-    sorted_scores = get_sorted_scores(firebase_url, 'scores/')
-
-    table_str = ''
-
-    table_str += '+' + '-' * total_width + '+\n'
-    table_str += '|' + "排行榜".center(total_width - 3) + '|\n'
-    table_str += '+' + '-' * total_width + '+\n'
-    table_str += f"|{'排名'.center(rank_width)}|{'User'.center(user_width)}|{'Score'.center(score_width)}|\n"
-    table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
-
-    if sorted_scores:
-        i = 1
-        for user, score in sorted_scores:
-            if user == current_user_id:
-                user_display = f'Ｍe'
-            else:
-                user_display = user[:5]
-
-            table_str += f"|{str(i).center(rank_width)}|{user_display.center(user_width)}|{str(score).center(score_width)}|\n"
-            table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
-            i += 1
-    else:
-        table_str += '|' + '目前無人上榜'.center(total_width) + '|\n'
-        table_str += '+' + '-' * total_width + '+\n'
-    return table_str
+    scores = fdb.get('scores', None) or {}
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    rank = 1
+    for uid, score in sorted_scores:
+        if uid == user_id:
+            break
+        rank += 1
+    total_users = len(sorted_scores)
+    return f"你的當前排名是：第{rank}名，共{total_users}名用戶。"
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
