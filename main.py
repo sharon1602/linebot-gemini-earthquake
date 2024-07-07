@@ -85,7 +85,8 @@ async def handle_callback(request: Request):
         elif event.message.text == '分數':
             reply_msg = f"你的當前分數是：{user_score}分"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
-        elif text == "解析":
+        elif event.message.text == "解析":
+            chatgpt = fdb.get(f'chat/{user_id}', None)
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 message = chatgpt[-1]['parts'][0]
                 is_scam = chatgpt[-1]['is_scam']
@@ -93,6 +94,7 @@ async def handle_callback(request: Request):
                 reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。分析如下:\n\n{advice}"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
         elif event.message.text in ['是', '否']:
             chatgpt = fdb.get(f'chat/{user_id}', None)
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
@@ -102,17 +104,17 @@ async def handle_callback(request: Request):
 
                 if user_response == is_scam:
                     user_score += 50
-                    fdb.put_async(user_score_path, None, user_score)
-                    reply_msg = f"你好棒！你的當前分數是：{user_score}分"
                 else:
                     user_score -= 50
-                    fdb.put_async(user_score_path, None, user_score)
                     advice = analyze_response(scam_message if is_scam else correct_message, is_scam, user_response)
                     reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+
+                fdb.put_async(user_score_path, None, user_score)
+                reply_msg = f"你的當前分數是：{user_score}分"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
         else:
             reply_msg = '請先回答「是」或「否」來判斷詐騙訊息，再查看解析。'
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
@@ -128,66 +130,23 @@ def generate_examples():
         "只需要生成詐騙訊息本身，不要添加任何額外的說明或指示。"
     )
     prompt_correct = (
-        f"請生成一個真實且正確的訊息範例，其風格和結構類似於以下的詐騙訊息範例，但內容是真實且正確的:\n\n{scam_template}"
+        "這是一個合法的範例訊息，請根據上面的詐騙訊息範例生成一個與之類似但是合法的範例訊息。"
+        "保持相似的結構和風格，但改變具體內容。只需要生成正確訊息本身，不要添加任何額外的說明或指示。"
     )
 
-    model = genai.GenerativeModel('gemini-pro')
-    scam_response = model.generate_content(prompt_scam)
-    correct_response = model.generate_content(prompt_correct)
-    return scam_response.text.strip(), correct_response.text.strip()
+    return prompt_scam, prompt_correct
 
-def analyze_response(text, is_scam, user_response):
-    if user_response == is_scam:
-        # 如果用户回答正确
-        if is_scam:
-            prompt = (
-                f"以下是一個詐騙訊息:\n\n{text}\n\n"
-                "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的可疑元素\n"
-                "2. 為什麼這些元素是可疑的\n"
-                "3. 如何識別類似的詐騙訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高警惕。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
+def analyze_response(message, is_scam, user_response):
+    if is_scam:
+        if user_response:
+            return "這確實是一條詐騙訊息。建議永遠不要點擊訊息中的連結，並且可以通過報告詐騙行為來保護自己和他人。"
         else:
-            prompt = (
-                f"以下是一個真實且正確的訊息:\n\n{text}\n\n"
-                "請分析這條訊息，並提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的真實元素\n"
-                "2. 為什麼這些元素是真實的\n"
-                "3. 如何識別類似的真實訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高辨別真實訊息的能力。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
+            return "這不是詐騙訊息，但這條訊息具有一些可能令人懷疑的特徵。建議保持警惕，避免與此類訊息交互。"
     else:
-        # 如果用户回答错误
-        if is_scam:
-            prompt = (
-                f"以下是一個詐騙訊息:\n\n{text}\n\n"
-                "用教育性和提醒性的語氣，指出這是詐騙訊息。請提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的可疑元素\n"
-                "2. 為什麼這些元素是可疑的\n"
-                "3. 如何識別類似的詐騙訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高警惕。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
+        if user_response:
+            return "這是一條合法的訊息，沒有任何詐騙行為跡象。請繼續保持警惕，但可以安全地與這條訊息進行互動。"
         else:
-            prompt = (
-                f"以下是一個真實且正確的訊息:\n\n{text}\n\n"
-                "用教育性和提醒性的語氣，指出這是真實且正確的訊息。請提供詳細的辨別建議。包括以下幾點：\n"
-                "1. 這條訊息中的真實元素\n"
-                "2. 為什麼這些元素是真實的\n"
-                "3. 如何識別類似的真實訊息\n"
-                "4. 面對這種訊息時應該採取什麼行動\n"
-                "請以教育性和提醒性的語氣回答，幫助人們提高辨別真實訊息的能力。"
-                "不要使用任何粗體或任何特殊格式，例如＊或是-，不要使用markdown語法，只需使用純文本。不要使用破折號，而是使用數字列表。"
-            )
-    model = genai.GenerativeModel('gemini-pro')
-    response = model.generate_content(prompt)
-    return response.text.strip()
+            return "這不是詐騙訊息，並且沒有任何可能令人懷疑的特徵。請繼續保持警惕，但可以安全地與這條訊息進行互動。"
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
