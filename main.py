@@ -72,7 +72,7 @@ async def handle_callback(request: Request):
             scam_example, correct_example = generate_examples()
             messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
             fdb.put_async(f'chat/{user_id}', None, messages)
-            reply_msg = f"訊息:\n\n{scam_example}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
+            reply_msg = f"{scam_example}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否'）"
         elif event.message.text == '分數':
             reply_msg = f"你的當前分數是：{user_score}分"
         elif event.message.text in ['是', '否']:
