@@ -118,6 +118,15 @@ async def handle_callback(request: Request):
                 reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。❗️\n如下:\n\n{advice}"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
+        elif msg == '!確認樣板':
+        confirm_template = ConfirmTemplate(
+            text='您確定嗎？',
+            actions=[
+                MessageAction(label='是', text='Yes'),
+                MessageAction(label='否', text='No')
+            ]
+        )
+        return TemplateSendMessage(alt_text='確認樣板', template=confirm_template)
         elif text in ["是", "否"]:
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 message = chatgpt[-1]['parts'][0]
