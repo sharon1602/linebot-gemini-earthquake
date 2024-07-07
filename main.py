@@ -118,9 +118,7 @@ async def handle_callback(request: Request):
                 advice = analyze_response(scam_message if is_scam else correct_message, is_scam, True)
                 reply_msg = f"分析如下:\n\n{advice}"
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
-            else:
-                reply_msg = '請先回答「是」或「否」來判斷詐騙訊息，再查看解析。'
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+           
         elif event.message.text == "排行榜":
             reply_msg = get_rank(user_id, firebase_url)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
