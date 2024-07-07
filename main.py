@@ -72,7 +72,6 @@ async def handle_callback(request: Request):
             scam_example, correct_example = generate_examples()
             messages = [{'role': 'bot', 'parts': [scam_example, correct_example]}]
             fdb.put_async(f'chat/{user_id}', None, messages)
-            fdb.put_async(f'answered/{user_id}', None, False)  # 設置用戶未回答狀態
             reply_msg = f"{scam_example}\n\n請判斷這是否為詐騙訊息"
             confirm_template = ConfirmTemplate(
                 text='請判斷是否為詐騙訊息。',
@@ -87,12 +86,6 @@ async def handle_callback(request: Request):
             reply_msg = f"你的當前分數是：{user_score}分"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
         elif event.message.text in ['是', '否']:
-            answered = fdb.get(f'answered/{user_id}', None)
-            if answered:
-                reply_msg = '你已經回答過了，請先輸入「出題」生成新範例。'
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
-                continue
-            
             chatgpt = fdb.get(f'chat/{user_id}', None)
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 scam_message, correct_message = chatgpt[-1]['parts']
@@ -105,7 +98,7 @@ async def handle_callback(request: Request):
                     reply_msg = f"你好棒！你的當前分數是：{user_score}分"
                 else:
                     user_score -= 50
-                    if user_score < 0:
+                    if user_score < 50:
                         user_score = 0
                     fdb.put_async(user_score_path, None, user_score)
                     if is_scam:
@@ -113,8 +106,6 @@ async def handle_callback(request: Request):
                     else:
                         advice = analyze_response(correct_message, is_scam, user_response)
                         reply_msg = f"這是正確訊息。分析如下:\n\n{advice}\n\n你的當前分數是：{user_score}分"
-
-                fdb.put_async(f'answered/{user_id}', None, True)  # 設置用戶已回答狀態
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
@@ -152,44 +143,72 @@ def generate_examples():
     )
 
     model = genai.GenerativeModel('gemini-pro')
-    response_scam = model.generate(text=prompt_scam, temperature=0.7, max_output_tokens=300)
-    response_correct = model.generate(text=prompt_correct, temperature=0.7, max_output_tokens=300)
+    scam_response = model.generate_content(prompt_scam)
+    correct_response = model.generate_content(prompt_correct)
+    return scam_response.text.strip(), correct_response.text.strip()
 
-    scam_example = response_scam.generations[0].text.strip()
-    correct_example = response_correct.generations[0].text.strip()
+def analyze_response(text, is_scam, user_response):
+    if user_response == is_scam:
+        if is_scam:
+            prompt = (
+                f"以下是一個詐騙訊息:\n\n{text}\n\n"
+                "請解釋這條訊息是如何詐騙的，並提供相應的應對策略。"
+            )
+        else:
+            prompt = (
+                f"以下是一條真實且正確的訊息:\n\n{text}\n\n"
+                "請分析這條訊息，並提供詳細的解釋，說明這條訊息是真實且正確的，"
+                "包括內容的合理性、可信度來源等。"
+            )
 
-    return scam_example, correct_example
-
-def analyze_response(message, is_scam, user_response):
-    if is_scam:
-        advice = "這是一個典型的詐騙訊息，請注意以下幾點：\n\n"
-        advice += "1. 不明網址：詐騙訊息通常包含可疑或不明的連結。\n"
-        advice += "2. 緊急性：詐騙訊息常使用恐嚇或緊急語氣，迫使收信人立即行動。\n"
-        advice += "3. 語法和拼寫錯誤：詐騙訊息往往包含語法和拼寫錯誤。\n"
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt)
+        return response.text.strip()
     else:
-        advice = "這是一個真實的訊息，請注意以下幾點：\n\n"
-        advice += "1. 正規的發送者：訊息通常來自官方或可信賴的發送者。\n"
-        advice += "2. 無緊急性：真實訊息不會使用恐嚇或緊急語氣。\n"
-        advice += "3. 正確的語法和拼寫：真實訊息的語法和拼寫通常都是正確的。\n"
-    return advice
+        return "無法分析，請提供正確的回答"
 
-def get_rank(user_id, firebase_url):
+def get_sorted_scores(firebase_url, path):
     fdb = firebase.FirebaseApplication(firebase_url, None)
-    scores = fdb.get('/scores', None)
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    rank = 1
-    user_score = 0
-    rank_msg = ""
-    for uid, score in sorted_scores:
-        rank_msg += f"{rank}. User: {uid[-5:]} - Score: {score}\n"
-        if uid == user_id:
-            user_score = score
-        rank += 1
-    if user_id not in scores:
-        user_score = 0
-    rank_msg += f"\n你的分數是: {user_score}\n"
-    return rank_msg
+    scores = fdb.get(path, None)
+    
+    if scores:
+        score_list = [(user, score) for user, score in scores.items()]
+        sorted_score_list = sorted(score_list, key=lambda x: x[1], reverse=True)
+        return sorted_score_list
+    else:
+        return []
+
+def get_rank(current_user_id, firebase_url):
+    rank_width = 7
+    user_width = 14
+    score_width = 11
+    total_width = rank_width + user_width + score_width + 4
+
+    sorted_scores = get_sorted_scores(firebase_url, 'scores/')
+
+    table_str = ''
+
+    table_str += '+' + '-' * total_width + '+\n'
+    table_str += '|' + "排行榜".center(total_width - 3) + '|\n'
+    table_str += '+' + '-' * total_width + '+\n'
+    table_str += f"|{'排名'.center(rank_width)}|{'User'.center(user_width)}|{'Score'.center(score_width)}|\n"
+    table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
+
+    if sorted_scores:
+        i = 1
+        for user, score in sorted_scores:
+            if user == current_user_id:
+                user_display = f'*{user[:user_width]}*'
+            else:
+                user_display = user[:5]
+
+            table_str += f"|{str(i).center(rank_width)}|{user_display.center(user_width)}|{str(score).center(score_width)}|\n"
+            table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
+            i += 1
+    else:
+        table_str += '|' + '目前無人上榜'.center(total_width) + '|\n'
+        table_str += '+' + '-' * total_width + '+\n'
+    return table_str
 
 if __name__ == "__main__":
-    port = int(os.getenv('PORT', 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
