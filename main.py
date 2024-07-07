@@ -108,6 +108,14 @@ async def handle_callback(request: Request):
             messages = [{'role': 'bot', 'parts': [message], 'is_scam': is_scam}]
             fdb.put_async(user_chat_path, None, messages)
             reply_msg = f"{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否')❗️❗️"
+            confirm_template = ConfirmTemplate(
+            text='您確定嗎？',
+            actions=[
+                MessageAction(label='是', text='Yes'),
+                MessageAction(label='否', text='No')
+            ]
+        )
+        return TemplateSendMessage(alt_text='出題', template=confirm_template)
         elif text == "分數":
             reply_msg = f"你的當前分數是：{user_score}分 👍"
         elif text == "解析":
@@ -118,16 +126,7 @@ async def handle_callback(request: Request):
                 reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。❗️\n如下:\n\n{advice}"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
-        elif msg == '!確認樣板':
-        confirm_template = ConfirmTemplate(
-            text='您確定嗎？',
-            actions=[
-                MessageAction(label='是', text='Yes'),
-                MessageAction(label='否', text='No')
-            ]
-        )
-        return TemplateSendMessage(alt_text='確認樣板', template=confirm_template)
-        elif text in ["是", "否"]:
+        elif text in ["Yes", "No"]:
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 message = chatgpt[-1]['parts'][0]
                 is_scam = chatgpt[-1]['is_scam']
