@@ -85,8 +85,14 @@ async def handle_callback(request: Request):
         elif event.message.text == '分數':
             reply_msg = f"你的當前分數是：{user_score}分"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
-        elif text == "排行榜":
-            reply_msg=get_rank(user_id,firebase_url）
+        elif text == "解析":
+            if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
+                message = chatgpt[-1]['parts'][0]
+                is_scam = chatgpt[-1]['is_scam']
+                advice = analyze_response(message, is_scam, is_scam)
+                reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。分析如下:\n\n{advice}"
+            else:
+                reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
         elif event.message.text in ['是', '否']:
             chatgpt = fdb.get(f'chat/{user_id}', None)
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
@@ -182,60 +188,6 @@ def analyze_response(text, is_scam, user_response):
     model = genai.GenerativeModel('gemini-pro')
     response = model.generate_content(prompt)
     return response.text.strip()
-
-def get_sorted_scores(firebase_url,path):
-
-    fdb = firebase.FirebaseApplication(firebase_url, None)
-    # 從 Firebase 獲取 score 節點下的所有資料
-    scores = fdb.get(path, None)
-    
-    if scores:
-        # 將資料轉換成 (user, score) 的列表
-        score_list = [(user, score) for user, score in scores.items()]
-        # 按照分數進行排序，從高到低
-        sorted_score_list = sorted(score_list, key=lambda x: x[1], reverse=True)
-        return sorted_score_list
-    else:
-        return []
-
-
-def get_rank(current_user_id,firebase_url):
-
-    # 設定表格的欄位寬度
-    rank_width = 8
-    user_width = 15
-    score_width = 12
-    total_width = rank_width + user_width + score_width + 4  # 包括分隔符號
-
-    sorted_scores = get_sorted_scores(firebase_url,'scores/')
-
-    # 初始化表格字串
-    table_str = ''
-
-    # 表格頂部邊界
-    table_str += '+' + '-' * total_width + '+\n'
-    table_str += '|' + "排行榜".center(total_width) + '|\n'
-    table_str += '+' + '-' * total_width + '+\n'
-    table_str += f"|{'排名'.center(rank_width)}|{'User'.center(user_width)}|{'Score'.center(score_width)}|\n"
-    table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
-
-    if sorted_scores:
-        i = 1
-        for user, score in sorted_scores:
-            # 標記當前使用者
-            if user == current_user_id:
-                user_display = f'Your ID'
-            else:
-                user_display = user[:5]
-
-            table_str += f"|{str(i).center(rank_width)}|{user_display.center(user_width)}|{str(score).center(score_width)}|\n"
-            table_str += '+' + '-' * rank_width + '+' + '-' * user_width + '+' + '-' * score_width + '+\n'
-            i += 1
-    else:
-        table_str += '|' + '目前無人上榜'.center(total_width) + '|\n'
-        table_str += '+' + '-' * total_width + '+\n'
-    return table_str
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
