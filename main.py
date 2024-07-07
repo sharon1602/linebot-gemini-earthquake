@@ -198,7 +198,7 @@ def get_rank(current_user_id, firebase_url):
         i = 1
         for user, score in sorted_scores:
             if user == current_user_id:
-                user_display = f'*{user[:user_width]}*'
+                user_display = f'Ｍe'
             else:
                 user_display = user[:5]
 
