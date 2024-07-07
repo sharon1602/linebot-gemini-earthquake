@@ -53,15 +53,6 @@ scam_templates = [
     "萬聖節快樂🎃 活動免費貼圖無限量下載 https://lineeshop.com",
     "【台灣電力股份有限公司】貴戶本期電費已逾期，總計新台幣1058元整，務請於6月14日前處理繳費，詳情繳費：(網址)，若再超過上述日期，將停止收費"
 ]
-real_templates = [
-    "Gap夏季盛典⭐全面4折起⭐上班穿搭從容通勤，下班換上神短褲🩳到LINE查詢會員點數抵消費 https://maac.io/20nHK",
-    "【中華電信網路門市優惠通知】3月起精彩運動賽事BWF全英公開賽、MLB等即將開打！Hami Video影視雙享包含超過100個頻道(運動、新聞、生活等)+萬部電影、戲劇，每月僅$188起，最高再贈8GB/月上網量！追劇好康雙享不錯過，立即了解→ https://cht.tw/x/5qud8",
-    "【momo年末應援】有錢快領100元購物金！全館商品現折$100，提醒購物金效期有限，手刀搶購 https://momo.dm/uVbyf3",
-    "警政署提醒您，詐團盜用名人照片投放投資廣告吸引加LINE群組，群組成員多為詐團暗樁，切勿輕易相信，詳見：165.npa.gov.tw。",
-    "9/14起中友購物節全館滿仟贈點！獨享會員禮、15大指定銀行刷卡禮、扣10點抽百萬經典豪車！ https://reurl.cc/jvq99D",
-    "【恭喜您獲得加碼資格！】感謝您使用台新信用卡，請於收到本簡訊3天內首登Richart Life APP tsbk.tw/3z7vxy/ 點擊「我的」>「輸入推薦碼」輸入「CARD30」即贈限量刷卡金30元！謹慎理財信用至上循環利率6.75%-15%",
-    "【跨年LINE POINTS一把抓】貼圖、美食優惠券，完成任務讓你點數領不完，都在台新LINE https://tsbk.tw/5fnvc9"
-]
 
 @app.get("/health")
 async def health():
@@ -108,14 +99,6 @@ async def handle_callback(request: Request):
             messages = [{'role': 'bot', 'parts': [message], 'is_scam': is_scam}]
             fdb.put_async(user_chat_path, None, messages)
             reply_msg = f"{message}\n\n請判斷這是否為詐騙訊息（請回覆'是'或'否')❗️❗️"
-            confirm_template = ConfirmTemplate(
-            text='您確定嗎？',
-            actions=[
-                MessageAction(label='是', text='Yes'),
-                MessageAction(label='否', text='No')
-            ]
-        )
-        return TemplateSendMessage(alt_text='出題', template=confirm_template)
         elif text == "分數":
             reply_msg = f"你的當前分數是：{user_score}分 👍"
         elif text == "解析":
@@ -126,7 +109,7 @@ async def handle_callback(request: Request):
                 reply_msg = f"這是{'詐騙' if is_scam else '正確'}訊息。❗️\n如下:\n\n{advice}"
             else:
                 reply_msg = '目前沒有可供解析的訊息，請先輸入「出題」生成一個範例。'
-        elif text in ["Yes", "No"]:
+        elif text in ["是", "否"]:
             if chatgpt and len(chatgpt) > 0 and chatgpt[-1]['role'] == 'bot':
                 message = chatgpt[-1]['parts'][0]
                 is_scam = chatgpt[-1]['is_scam']
@@ -157,22 +140,22 @@ async def handle_callback(request: Request):
 
     return 'OK'
 
-
 def generate_examples():
+    scam_template = random.choice(scam_templates)
     prompt_scam = (
-        "請以{random.choice(scam_templates)}作為範例生成一個詐騙訊息範例。請注意，這條訊息應該是以詐騙為目的，並包含誘導性、虛假或令人感到緊急的內容，"
-        "例如銀行詐騙、假冒官員、假冒朋友等。這條訊息將用於教育和提醒人們如何辨別詐騙訊息。\n\n"
-        f"{random.choice(scam_templates)}"
+        f"以下是一個詐騙訊息範例:\n\n{scam_template}\n\n"
+        "請根據這個範例生成一個新的、類似的詐騙訊息。保持相似的結構和風格，"
+        "但改變具體內容。請確保新生成的訊息具有教育性質，可以用於提高人們對詐騙的警惕性。"
+        "只需要生成詐騙訊息本身，不要添加任何額外的說明或指示。"
     )
     prompt_correct = (
-        "請以{random.choice(real_templates)}作為範例生成一個真實且正確的訊息範例。請確保這條訊息與下列真實訊息範例相似，但內容必須是真實且正確的，"
-        "例如商家促銷、官方公告或其他合法的信息。請確保生成的訊息能夠用於教育和提醒人們如何辨別真實信息。\n\n"
-       
+        f"請生成一個真實且正確的訊息範例，其風格和結構類似於以下的詐騙訊息範例，但內容是真實且正確的:\n\n{scam_template}"
     )
+
     model = genai.GenerativeModel('gemini-pro')
-    scam_example = model.generate_content(prompt_scam).text.strip()
-    correct_example = model.generate_content(prompt_correct).text.strip()
-    return scam_example, correct_example
+    scam_response = model.generate_content(prompt_scam)
+    correct_response = model.generate_content(prompt_correct)
+    return scam_response.text.strip(), correct_response.text.strip()
 
 def analyze_response(text, is_scam, user_response):
     if user_response == is_scam:
